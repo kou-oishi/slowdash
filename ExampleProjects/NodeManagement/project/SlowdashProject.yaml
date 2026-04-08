@@ -1,0 +1,45 @@
+slowdash_project:
+  name: Sample-SlowControl
+  title: A Sample Slow Control System
+
+  data_source:
+    type: MySQL
+    parameters:
+      url: sdtest:sdtest_passwd@localhost:3306/sdtest_db
+      time_series:
+        schema: chiller_temperature[channel]@timestamp(utc)=temperature
+        tags:
+          sql: "SELECT channel from chiller_channel"
+
+  node_management:
+    # State / alert history (text log files) — node_management 全体の設定
+    history:
+      directory: logs/node_management
+      state_history:
+        enabled: true
+        min_state: READY      # OFFLINE 単独は記録しない
+        store_offline: false
+      alert_history:
+        enabled: true
+        min_level: warning    # info アラートはログしない
+
+    nodes:
+      chiller:
+        label: "Chiller (Dummy YamatoBB301)"
+
+        # serial_id = zero-padded channel number used in HTML controls (start_00, set_temperature_00 …)
+        serials:
+          "00":
+            label: "Channel 00"
+
+        # heartbeat grace period — monitor interval is 20 s, so allow ~3 misses
+        heartbeat_grace_seconds: 90
+
+        # SlowDash owner module: receives _on_state_update / _on_alert_update callbacks
+        # and forwards operator commands to the chiller_server via TCP
+        module:
+          file: chiller.py
+          enabled_for_commandline: true
+          parameters:
+            tcp_host: localhost
+            tcp_port: 15000
