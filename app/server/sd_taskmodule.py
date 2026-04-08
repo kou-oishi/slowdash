@@ -393,7 +393,8 @@ class TaskModuleComponent(Component):
         self.taskmodule_list = []
         self.known_task_list = []
         self.status_revision = 1
-        
+        self._node_task_map = {}   # node_id -> task module name, for owner binding at startup
+
         if not hasattr(app, 'control_system'):
             app.control_system = None
         self.slowpy_control = SlowpyControl(app)
@@ -403,7 +404,7 @@ class TaskModuleComponent(Component):
             taskmodule_node = self.project.config.get('tasks', [])  # suger added...
         if not isinstance(taskmodule_node, list):
             taskmodule_node = [ taskmodule_node ]
-                    
+
         task_table = {}
         for node in taskmodule_node:
             if not isinstance(node, dict):
@@ -421,7 +422,7 @@ class TaskModuleComponent(Component):
             filepath = node.get('file', './config/slowtask-%s.py' % name)
             task_table[name] = (filepath, node)
             self.known_task_list.append(name)
-        
+
         # make a task entry list from the file list of the config dir
         if not app.is_cgi and self.project.project_dir is not None:
             for filepath in glob.glob(os.path.join(self.project.project_dir, 'config', 'slowtask-*.py')):
@@ -439,10 +440,53 @@ class TaskModuleComponent(Component):
                 module.auto_load = params.get('auto_load', False)
                 self.taskmodule_list.append(module)
 
-                
+        # node_management: load tasks defined under node_management.nodes.<id>.task
+        nm_nodes = self.project.config.get('node_management', {}).get('nodes', {}) or {}
+        for node_id, node_cfg in nm_nodes.items():
+            if not isinstance(node_cfg, dict):
+                continue
+            task_cfg = node_cfg.get('task')
+            if not isinstance(task_cfg, dict):
+                continue
+            if app.is_cgi and not task_cfg.get('enabled_for_cgi', False):
+                continue
+            if app.is_command and not task_cfg.get('enabled_for_commandline', True):
+                continue
+            name = task_cfg.get('name', f'node_{node_id}')
+            filepath = task_cfg.get('file', f'./config/slowtask-{name}.py')
+            # Inject node context into parameters
+            merged_params = dict(task_cfg.get('parameters', {}))
+            merged_params['_node_id'] = node_id
+            merged_params['_serials'] = list((node_cfg.get('serials') or {}).keys())
+            merged_cfg = dict(task_cfg)
+            merged_cfg['parameters'] = merged_params
+            if name not in self.known_task_list:
+                task_table[name] = (filepath, merged_cfg)
+                self.known_task_list.append(name)
+                module = TaskModule(app, filepath, name, merged_cfg)
+                module.node_id = node_id
+                module.auto_load = merged_cfg.get('auto_load', False)
+                self.taskmodule_list.append(module)
+                self._node_task_map[node_id] = name
+                logging.info(f'node_management: registered task "{name}" as owner of node "{node_id}"')
+
+
     @slowlette.on_event('startup')
     async def startup(self):
         await asyncio.gather(*(module.start() for module in self.taskmodule_list if module.auto_load))
+        self._bind_node_owners()
+
+    def _bind_node_owners(self):
+        """Bind owner tasks to their nodes in the node_management registry."""
+        nm = getattr(self.app, 'node_management', None)
+        if nm is None or getattr(nm, '_registry', None) is None:
+            return
+        for node_id, task_name in self._node_task_map.items():
+            node = nm._registry.get(node_id)
+            task = next((m for m in self.taskmodule_list if m.name == task_name), None)
+            if node is not None and task is not None:
+                node._owner = task
+                logging.info(f'node_management: task "{task_name}" bound as owner of node "{node_id}"')
 
 
     @slowlette.on_event('shutdown')

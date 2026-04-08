@@ -158,7 +158,7 @@ class UserModuleThread(threading.Thread):
 
 
 
-class UserModule:        
+class UserModule:
     def __init__(self, app, filepath, name, params):
         self.app = app
         self.filepath = filepath
@@ -179,14 +179,17 @@ class UserModule:
         self.func_get_layout = None
         self.html_list = []
         self.layout_list = []
-        
+
         self.routine_history = []
         self.command_history = []
         self.error = None
         self.is_waiting = False
-        
+
         self.status_revision = int(time.time())
         self.was_running = False
+
+        # node_management: set to node_id string if this module is an owner of a node
+        self.node_id = None
 
         
     def _preset_module(self, module):
@@ -576,19 +579,35 @@ class UserModule:
         self.error = None
 
 
+    async def emit_alert(self, alert_record):
+        """Emit an alert from this owner module to its associated node.
+        alert_record: an AlertRecord instance (from sd_nodemgr_alert).
+        Returns the alert_id, or None on failure.
+        """
+        nm = getattr(self.app, 'node_management', None)
+        if nm is None:
+            logging.warning(f'UserModule.emit_alert: node_management not available')
+            return None
+        if self.node_id is None:
+            logging.warning(f'UserModule "{self.name}": emit_alert called but no node_id assigned')
+            return None
+        return await nm.emit_alert(self.node_id, alert_record)
+
+
 
 class UserModuleComponent(Component):
     def __init__(self, app, project):
         super().__init__(app, project)
 
         self.usermodule_list = {}
-        
+        self._node_module_map = {}   # node_id -> module_name, for owner binding at startup
+
         usermodule_node = self.project.config.get('module', None)
         if usermodule_node is None:
             usermodule_node = self.project.config.get('modules', [])  # suger added...
         if not isinstance(usermodule_node, list):
             usermodule_node = [ usermodule_node ]
-            
+
         for node in usermodule_node:
             if not isinstance(node, dict) or 'file' not in node:
                 logging.error('bad user module configuration')
@@ -615,10 +634,60 @@ class UserModuleComponent(Component):
                 else:
                     logging.error(f'Too many user modules of the same name: {name}')
 
+        # node_management: load modules defined under node_management.nodes.<id>.module
+        nm_nodes = self.project.config.get('node_management', {}).get('nodes', {}) or {}
+        for node_id, node_cfg in nm_nodes.items():
+            if not isinstance(node_cfg, dict):
+                continue
+            module_cfg = node_cfg.get('module')
+            if not isinstance(module_cfg, dict) or 'file' not in module_cfg:
+                continue
+            if app.is_cgi and module_cfg.get('enabled_for_cgi', False) != True:
+                continue
+            if app.is_command and module_cfg.get('enabled_for_commandline', True) != True:
+                continue
+            filepath = module_cfg['file']
+            name = module_cfg.get('name', f'node_{node_id}')
+            # Inject node context into parameters so _initialize(params) can read it
+            merged_params = dict(module_cfg.get('parameters', {}))
+            merged_params['_node_id'] = node_id
+            merged_params['_serials'] = list((node_cfg.get('serials') or {}).keys())
+            merged_cfg = dict(module_cfg)
+            merged_cfg['parameters'] = merged_params
+            module = UserModule(self.app, filepath, name, merged_cfg)
+            module.node_id = node_id
+            if module is None:
+                logging.error('Unable to load node_management user module: %s' % filepath)
+                continue
+            if name not in self.usermodule_list:
+                self.usermodule_list[name] = module
+            else:
+                for i in range(2, 100):
+                    new_name = f'{name}__{i}'
+                    if new_name not in self.usermodule_list:
+                        self.usermodule_list[new_name] = module
+                        name = new_name
+                        break
+            self._node_module_map[node_id] = name
+            logging.info(f'node_management: registered module "{name}" as owner of node "{node_id}"')
+
 
     @slowlette.on_event('startup')
     async def startup(self):
         await asyncio.gather(*(module.start() for module in self.usermodule_list.values()))
+        self._bind_node_owners()
+
+    def _bind_node_owners(self):
+        """Bind owner modules to their nodes in the node_management registry."""
+        nm = getattr(self.app, 'node_management', None)
+        if nm is None or getattr(nm, '_registry', None) is None:
+            return
+        for node_id, module_name in self._node_module_map.items():
+            node = nm._registry.get(node_id)
+            module = self.usermodule_list.get(module_name)
+            if node is not None and module is not None:
+                node._owner = module
+                logging.info(f'node_management: module "{module_name}" bound as owner of node "{node_id}"')
 
 
     @slowlette.on_event('shutdown')

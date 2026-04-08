@@ -45,10 +45,26 @@
         ]
     };
 
+    function injectNodeManagementPanels(config) {
+        // If node_management is configured, prepend a State + Alert row above the existing 2×2 grid.
+        const nm = config?._project?.node_management;
+        if (!nm || !nm.nodes || nm.nodes.length === 0) return;
+
+        layout_config.control.grid.rows = 3;
+        layout_config.panels.unshift(
+            { type: 'nodestatus' },
+            { type: 'nodealerts' },
+        );
+    }
 
     async function main() {
         $('#sd-layout').css({'width':"100%", 'margin':0, 'padding':0});
         let slowdash = new SlowDash($('#sd-layout'));
+
+        // Fetch project config first so we can decide whether to add node_management panels
+        const projectConfig = await fetch('./api/config').then(r => r.ok ? r.json() : null).catch(() => null);
+        injectNodeManagementPanels(projectConfig ? { _project: projectConfig } : null);
+
         const config = await slowdash.configure(layout_config);
         
         let title = config._project.project?.title || config._project.project?.name || "SlowDash";

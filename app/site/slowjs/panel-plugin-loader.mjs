@@ -23,6 +23,7 @@ class PanelPluginLoader {
             './panel-catalog.mjs',
             './panel-download.mjs',
             './panel-misc.mjs',
+            './panel-nodemgmt.mjs',
         ];
         this.plugin_files = [
         ];

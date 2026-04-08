@@ -167,6 +167,18 @@ class PubsubComponent(Component):
                         receivers.append(websocket)
 
         await asyncio.gather(*(ws.send(message) for ws in receivers))
+
+
+    async def server_publish(self, topic: str, data: dict):
+        """Publish a message from the server side to all subscribers of a topic.
+        Called by NodeManagementComponent to emit state/alert/heartbeat events.
+        """
+        import json as _json
+        message = _json.dumps({
+            'headers': {'topic': topic, 'action': 'publish'},
+            'data': data,
+        })
+        await self.publish(topic, message, {'topic': topic})
                     
         
     def validate_topic_pattern(self, pattern:str):

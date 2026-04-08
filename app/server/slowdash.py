@@ -18,6 +18,7 @@ from sd_usermodule import UserModuleComponent
 from sd_taskmodule import TaskModuleComponent
 from sd_userhtml import UserHtmlComponent
 from sd_misc_api import MiscApiComponent
+from sd_nodemgr_api import NodeManagementComponent
 
 
 
@@ -63,9 +64,11 @@ class App(slowlette.App):
 
             
         ### API Components: see the Slowlette documentation for the mechanism ###
-        
+
         self.slowlette.include(ConsoleComponent(self, self.project))     # this must be the first to capture stdout
         self.slowlette.include(MeshComponent(self, self.project))        # mesh-cache override datasoruce replies
+        nm_component = NodeManagementComponent(self, self.project)       # must be before user/task modules
+        self.slowlette.include(nm_component)
         self.slowlette.include(UserModuleComponent(self, self.project))  # user module might want to capture API
         self.slowlette.include(TaskModuleComponent(self, self.project))
         self.slowlette.include(ConfigComponent(self, self.project))
@@ -73,7 +76,9 @@ class App(slowlette.App):
         self.slowlette.include(UserHtmlComponent(self, self.project))
         self.slowlette.include(ExportComponent(self, self.project))
         self.slowlette.include(MiscApiComponent(self, self.project))
-        self.slowlette.include(PubsubComponent(self, self.project))
+        pubsub_component = PubsubComponent(self, self.project)
+        self.slowlette.include(pubsub_component)
+        self._pubsub_component = pubsub_component                        # expose for server_publish
 
 
     @slowlette.on_event("shutdown")
